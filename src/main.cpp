@@ -1,10 +1,22 @@
 #include <Arduino.h>
+#include <bitset>
+#include <iostream>
+#include <sstream>
+#include <string>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
 
+// Maybe there should be another service to add a ble status light?
+
 #define LED_MATRIX_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+
 #define LED_MATRIX_STATE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define LED_CELL_STATE_CHARACTERISTIC_UUID "E95DD91D-251D-470A-A062-FA1922DFA9A8"
+#define LED_MATRIX_SIZE_CHARACTERISTIC_UUID "E95D7B77-251D-470A-A062-FA1922DFA9A8"
+
+// Not Implemented
+#define LED_CELL_COLORS_CHARACTERISTIC_UUID "9E9BBF6C-AC45-488C-9AE2-F0074B089AE2"
 
 /**
  * Stuctures
@@ -18,17 +30,13 @@
  * ...MESSAGE(eg Cell State)
  * ]
  *
- * LED_COLOR - 10
+ * LED_COLOR - 8
  * [
- *   // Color Identifier - 1
- *   00
  *   // Color Common Name - 8
  *    y  e  l l   o  w
  *   79 65 6C 6C 6F 77 00 00
- *   // Empty
- *   00
  * ]
- * 
+ *
  * LED_CELL_COLORS
  * [
  *  // Message Id
@@ -37,7 +45,7 @@
  *  50,
  *  ...LED_COLORs
  * ]
- * 
+ *
  * CELL_STATE - Length: 8
  * v1 - Len: 8
  * [
@@ -58,14 +66,22 @@
  *  orange
  *    3
  * ]
+ *
+ * v3 - Len: 1/4
+ * Binary Rep
+ * 0 = 00 / 1 = 01 / 2 = 10 / 3 = 11
+ * Hex Rep for 4 cell states
+ *       0  1  2  3
+ * 1B = 00 01 10 11
+ * the consuming application will have to extract 2 bits in cell order to get the cell value.
  * 
- * GATT
+ * GATT - Not totally accurate. Just some thoughts. This needs to be actually documented.
  * - LED_MATRIX_SERVICE
  *  + LED_MATRIX_SIZE - READ
  *    > [ 65, 03, TOTAL_ROWS(uint8_t), TOTAL_COLUMNS(uint8_t) ]
  *    > eg -> Hex: [ 65, 03, 06, 0C ] -> Decimal: [ 41, 3, 6, 12 ]
- *  + LED_CELL_COLORS
- *    > [66, 50, ...LED_COLOR[10][5(types)]]
+ *  + LED_CELL_COLORS - READ
+ *    > [...LED_COLOR[8][4(types)]]
  *  + LED_MATRIX_STATE - READ
  *    > v1
  *    > Fx12=72cells x 8 bytes=576 bytes
@@ -76,6 +92,8 @@
  *    > Fx12=72cells x 6 bytes =432 bytes
  *      * Max packet Tx 20 bytes/~20ms
  *      * 21.6 packets * 20ms = 0.432second
+ *    > v3
+ *      * 
  *  + LED_CELL_STATE - WRITE
  *    > Max Len 24
  *    > [68, ...CELL_STATE[6][n]] -> update cells
@@ -83,8 +101,19 @@
  *
  */
 
-// #define LEDMATRIX_SERVICE_SERVICE_UUID  "E95DD91D251D470AA062FA1922DFA9A8";
-// #define LEDMATRIXSTATE_CHARACTERISTIC_UUID  "E95D7B77251D470AA062FA1922DFA9A8";
+
+/*
+  Not Working:
+  * uint8_t[] -> hex
+    - Shouldn't be hard. I'm just inexperienced
+  * Remove Serial references
+  * LED Matrix support
+  * Resetting Board Not Implemented
+    - Needs to be more thought out as well. Not 100% sure if it should be part of cell state characteristic
+  * Get Colors Not Implemented
+  * Need to add a row/column concept
+    - How to connect int cell value -> R:C -> cell state?
+*/
 
 #define bleServerName "Bayer Sample Buddy"
 
@@ -115,83 +144,156 @@ class ServerCB : public BLEServerCallbacks
   }
 };
 
-void resetBoard() {
+// FIXME: This probably doesn't need to be a map. Just a use the index and the identifier;
+//  - Also, the words are not important to us. We'll need an uint8[3] -> [ red, green, blue ]
+//  - Also, maybe we need 4 values so we can also control the brightness, but that can be a stretch goal.
+std::map<int, std::string> colors = {
+    {0, "off"},
+    {1, "blue"},
+    {2, "red"},
+    {3, "orange"}};
+
+
+// int cls[16] = {3, 3, 3, 3, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2};
+
+// FIXME: This should be better. Maybe it should also be an int[cell.len]
+std::map<int, int> cells = {
+    {0, 0},
+    {1, 1},
+    {2, 2},
+    {3, 3},
+    {4, 0},
+    {5, 1},
+    {6, 2},
+    {7, 3},
+    {8, 0},
+    {9, 1},
+    {10, 2},
+    {11, 3},
+    {12, 0},
+    {13, 1},
+    {14, 2},
+    {15, 3},
+};
+
+// FIXME: Not connected to anything yet and not actually doing anything either.
+void resetBoard()
+{
   Serial.println("Resetting Board!");
 }
 
+// FIXME: I'm not sure this is working. It's return the correct hexString, but we may need to do something to get the hex[] out of it.
+bool to_hex(char *dest, size_t dest_len, const uint8_t *values, size_t val_len)
+{
+  if (dest_len < (val_len * 2 + 1)) /* check that dest is large enough */
+    return false;
+  *dest = '\0'; /* in case val_len==0 */
+  while (val_len--)
+  {
+    /* sprintf directly to where dest points */
+    sprintf(dest, "%02X", *values);
+    dest += 2;
+    ++values;
+  }
+  return true;
+}
+
+// MARK: Characteristic Declarations
+BLECharacteristic *pWriteCellCharacteristic;
+BLECharacteristic *pReadMatrixCharacteristic;
+BLECharacteristic *pReadMatrixSizeCharacteristic;
 
 
-class WriteCellCB: public BLECharacteristicCallbacks {
-  void onRead(BLECharacteristic* pChar) {
+// FIXME: Not working because I don't know what I'm doing.
+void writeMatrixSizeCharacteristic()
+{
+  // int v = 16;
+  // memcpy(v, cells.size(), 1);
+  //  = cells.size();
+  // std::map<int, int>* cs = cells;
+  // int v = cells->size();
+  // int &val = v;
+  pReadMatrixCharacteristic->setValue({0x10});
+  
+  // Logging Help
+  // int bufSize = sizeof(out) * 2 + 1;
+  // char buf[bufSize]; /* one extra for \0 */
+  // if (to_hex(buf, sizeof(buf), out, sizeof(out)))
+  // {
+  //   Serial.printf("%s\n", buf);
+  // }
+};
+
+// Kinda working.
+void writeMatrixCharacteristic()
+{
+  std::map<int, int>::iterator itr;
+  int totalCells = cells.size();
+  Serial.printf("totalCells: %d\n", totalCells);
+  int totalBytes = (totalCells * 2) / 8;
+  uint8_t out[totalBytes];
+  for (itr = cells.begin(); itr != cells.end(); itr++)
+  {
+    int key = itr->first;
+    int value = itr->second;
+    int idx = (key * 2) / 8;
+
+    out[idx] |= value << (6 - ((key % 4) * 2));
+  }
+
+  // Write matrix to read property
+  uint8_t *data = out;
+  size_t len = sizeof(out);
+  // FIXME: This setValue call isn't producing the value I expect in the client. How do we test this?
+  pReadMatrixCharacteristic->setValue(out, len);
+  
+  // Logging Help
+  // int bufSize = sizeof(out) * 2 + 1;
+  // char buf[bufSize]; /* one extra for \0 */
+  // if (to_hex(buf, sizeof(buf), out, sizeof(out)))
+  // {
+  //   Serial.printf("%s\n", buf);
+  // }
+};
+
+
+
+class WriteCellCB : public BLECharacteristicCallbacks
+{
+  // TODO: Remove
+  void onRead(BLECharacteristic *pChar)
+  {
     Serial.println("onRead");
   }
-  void onWrite(BLECharacteristic* pChar) {
-    int charLen = pChar->getLength();
-    uint8_t* data = pChar->getData();
-    uint8_t cellData[] = {data[0], data[1], data[2], data[3], data[4]};
-    // memcpy? 
-    Serial.printf("onWrite-> cell:%s\n", cellData);
-    Serial.printf("onWrite->red:%i\n", data[5]);
-    Serial.printf("onWrite->green:%i\n", data[6]);
-    Serial.printf("onWrite->blue:%i\n", data[7]);
+
+  // Handles incoming writes
+  void onWrite(BLECharacteristic *pChar)
+  {
+    // int charLen = pChar->getLength();
+    uint8_t *data = pChar->getData();
+
+    // Get cell to update
+    int cellUpdate = data[0];
+    // Get cell state
+    int color = data[1];
+
+    std::map<int, int>::iterator it = cells.find(cellUpdate);
+    // if cell and color exists, then set value in cell map
+    if (it != cells.end() && colors.find(color) != colors.end())
+    {
+      Serial.printf("Found cell: %i\n", cellUpdate);
+      Serial.printf("Found color: %i\n", color);
+      it->second = color;
+    }
+
+    writeMatrixCharacteristic();
   }
 };
-
-struct CellStruct {
-  std::string id;
-  int r = 0;
-  int g = 0;
-  int b = 0;
-};
-
-std::map<int, std::string> colors = {
-  {0, "blue"},
-  {1, "white"},
-  {2, "red"},
-  {3, "orange"},
-  {4, "yellow"}
-};
-
-std::map<std::string, int> cells = {
-    {"A:1", 0},
-    {"A:2", 0},
-    {"A:3", 0},
-    {"A:4", 0},
-    {"A:5", 0},
-    {"B:1", 0},
-    {"B:2", 0},
-    {"B:3", 0},
-    {"B:4", 0},
-    {"B:5", 0},
-    {"C:1", 0},
-    {"C:2", 0},
-    {"C:3", 0},
-    {"C:4", 0},
-    {"C:5", 0}
-};
-
-
-// std::map<std::string, uint8_t[]> cells;
-
-// // CellStruct temp = {"A:1"};
-
-// std::map<std::string, int> cells = {
-//   {"A:1", 0},
-//   {"A:2", 0}
-// };
 
 void setup()
 {
   // Start serial communication
   Serial.begin(115200);
-
-  // Setup Cell Map
-  CellStruct t = {};
-  // for(int i = 0; i < sizeof(cellNames) + 1; i++) {
-  //   std::string id = cellNames[i];
-  //   struct Cell c = { id };
-  //   cells[c.id] = c;
-  // }
 
   // Create BLE Device
   BLEDevice::init(bleServerName);
@@ -206,18 +308,32 @@ void setup()
   BLEService *pService = pServer->createService(LED_MATRIX_SERVICE_UUID);
 
   // Initialize characteristics
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+  pWriteCellCharacteristic = pService->createCharacteristic(
       LED_MATRIX_STATE_CHARACTERISTIC_UUID,
-      BLECharacteristic::PROPERTY_READ |
-          BLECharacteristic::PROPERTY_WRITE);
+      BLECharacteristic::PROPERTY_WRITE);
+  pWriteCellCharacteristic->setCallbacks(new WriteCellCB);
 
-  pCharacteristic->setValue("Hello World says Neil");
-  pCharacteristic->setCallbacks(new WriteCellCB);
+  // Initialize Matrix State Characteristics
+  pReadMatrixCharacteristic = pService->createCharacteristic(
+      LED_MATRIX_STATE_CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_READ);
+  
+  // Populate Matrix Characteristic
+  writeMatrixCharacteristic();
 
+  // LED_MATRIX_SIZE_CHARACTERISTIC_UUID
+  pReadMatrixSizeCharacteristic = pService->createCharacteristic(
+    LED_MATRIX_SIZE_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ);
+  
+  // Populate Matrix Size Characteristic
+  writeMatrixSizeCharacteristic();
 
+  // TODO: Initialize LED Matrix
 
   pService->start();
 
+  // FIXME: This should be more thought out
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(LED_MATRIX_SERVICE_UUID);
   pAdvertising->setScanResponse(true);
@@ -230,16 +346,7 @@ void setup()
 
 void loop()
 {
-  // if (deviceConnected)
-  // {
-  //   if ((millis() - lastTime) > timerDelay)
-  //   {
-  //     // Get sensor value
-  //     // Serial.println("Getting sensor value");
-  //   }
-  // }
+  // TODO: Set LED Matrix
 
   delay(2000);
-  // int cnt = pServer->getConnectedCount();
-  // Serial.printf("Connected Devices: %i\n", cnt);
 }
