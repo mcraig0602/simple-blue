@@ -203,25 +203,10 @@ BLECharacteristic *pWriteCellCharacteristic;
 BLECharacteristic *pReadMatrixCharacteristic;
 BLECharacteristic *pReadMatrixSizeCharacteristic;
 
-
-// FIXME: Not working because I don't know what I'm doing.
 void writeMatrixSizeCharacteristic()
 {
-  // int v = 16;
-  // memcpy(v, cells.size(), 1);
-  //  = cells.size();
-  // std::map<int, int>* cs = cells;
-  // int v = cells->size();
-  // int &val = v;
-  pReadMatrixCharacteristic->setValue({0x10});
-  
-  // Logging Help
-  // int bufSize = sizeof(out) * 2 + 1;
-  // char buf[bufSize]; /* one extra for \0 */
-  // if (to_hex(buf, sizeof(buf), out, sizeof(out)))
-  // {
-  //   Serial.printf("%s\n", buf);
-  // }
+  uint8_t v = cells.size();
+  pReadMatrixCharacteristic->setValue(&v, 1);
 };
 
 // Kinda working.
