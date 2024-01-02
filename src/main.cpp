@@ -6,17 +6,9 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+#include "Adafruit_NeoPixel.h"
 
 // Maybe there should be another service to add a ble status light?
-
-#define LED_MATRIX_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-
-#define LED_MATRIX_STATE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-#define LED_CELL_STATE_CHARACTERISTIC_UUID "E95DD91D-251D-470A-A062-FA1922DFA9A8"
-#define LED_MATRIX_SIZE_CHARACTERISTIC_UUID "E95D7B77-251D-470A-A062-FA1922DFA9A8"
-
-// Not Implemented
-#define LED_CELL_COLORS_CHARACTERISTIC_UUID "9E9BBF6C-AC45-488C-9AE2-F0074B089AE2"
 
 /**
  * Stuctures
@@ -104,19 +96,29 @@
 
 /*
   Not Working:
-  * uint8_t[] -> hex
-    - Shouldn't be hard. I'm just inexperienced
   * Remove Serial references
   * LED Matrix support
-  * Resetting Board Not Implemented
-    - Needs to be more thought out as well. Not 100% sure if it should be part of cell state characteristic
+  * Resetting Board Not Implemented in BLE
   * Get Colors Not Implemented
   * Need to add a row/column concept
     - How to connect int cell value -> R:C -> cell state?
 */
-
 #define bleServerName "Bayer Sample Buddy"
 
+#define LED_MATRIX_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+
+#define LED_MATRIX_STATE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define LED_CELL_STATE_CHARACTERISTIC_UUID "E95DD91D-251D-470A-A062-FA1922DFA9A8"
+#define LED_MATRIX_SIZE_CHARACTERISTIC_UUID "E95D7B77-251D-470A-A062-FA1922DFA9A8"
+
+// Not Implemented
+#define LED_CELL_COLORS_CHARACTERISTIC_UUID "9E9BBF6C-AC45-488C-9AE2-F0074B089AE2"
+
+// Pixel Array
+#define PIN 5
+#define SIZE 96
+
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(SIZE, PIN, NEO_GRB + NEO_KHZ800);
 BLEServer *pServer;
 
 // Timer variables
@@ -144,117 +146,59 @@ class ServerCB : public BLEServerCallbacks
   }
 };
 
-// FIXME: This probably doesn't need to be a map. Just a use the index and the identifier;
-//  - Also, the words are not important to us. We'll need an uint8[3] -> [ red, green, blue ]
-//  - Also, maybe we need 4 values so we can also control the brightness, but that can be a stretch goal.
-std::map<int, std::string> colors = {
-    {0, "off"},
-    {1, "blue"},
-    {2, "red"},
-    {3, "orange"}};
-
-
-// int cls[16] = {3, 3, 3, 3, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2};
-
-// FIXME: This should be better. Maybe it should also be an int[cell.len]
-std::map<int, int> cells = {
-    {0, 0},
-    {1, 1},
-    {2, 2},
-    {3, 3},
-    {4, 0},
-    {5, 1},
-    {6, 2},
-    {7, 3},
-    {8, 0},
-    {9, 1},
-    {10, 2},
-    {11, 3},
-    {12, 0},
-    {13, 1},
-    {14, 2},
-    {15, 3},
+int cells[SIZE];
+uint32_t colors[4] = {
+  0,
+  // BLUE
+  0xFF000000 | 255 | (0 << 16) | (0 << 8),
+  // RED
+  0xFF000000 | 0 | (255 << 16) | (0 << 8),
+  // AMBER
+  0xFF000000 | 0 | (255 << 16) | (100 << 8)
 };
-
-// FIXME: Not connected to anything yet and not actually doing anything either.
-void resetBoard()
-{
-  Serial.println("Resetting Board!");
-}
-
-// FIXME: I'm not sure this is working. It's return the correct hexString, but we may need to do something to get the hex[] out of it.
-bool to_hex(char *dest, size_t dest_len, const uint8_t *values, size_t val_len)
-{
-  if (dest_len < (val_len * 2 + 1)) /* check that dest is large enough */
-    return false;
-  *dest = '\0'; /* in case val_len==0 */
-  while (val_len--)
-  {
-    /* sprintf directly to where dest points */
-    sprintf(dest, "%02X", *values);
-    dest += 2;
-    ++values;
-  }
-  return true;
-}
 
 // MARK: Characteristic Declarations
 BLECharacteristic *pWriteCellCharacteristic;
 BLECharacteristic *pReadMatrixCharacteristic;
 BLECharacteristic *pReadMatrixSizeCharacteristic;
 
+// FIXME: Not connected to anything yet and not actually doing anything either.
+void resetBoard()
+{
+  Serial.println("Resetting Board!");
+  std::fill_n(cells, SIZE, 0);
+  writeMatrixCharacteristic();
+}
+
+
 void writeMatrixSizeCharacteristic()
 {
-  uint8_t v = cells.size();
-  pReadMatrixCharacteristic->setValue(&v, 1);
+  uint8_t v = SIZE;
+  pReadMatrixSizeCharacteristic->setValue(&v, 1);
 };
 
 // Kinda working.
 void writeMatrixCharacteristic()
 {
-  std::map<int, int>::iterator itr;
-  int totalCells = cells.size();
-  Serial.printf("totalCells: %d\n", totalCells);
-  int totalBytes = (totalCells * 2) / 8;
+  int totalBytes = (SIZE * 2) / 8;
   uint8_t out[totalBytes];
-  for (itr = cells.begin(); itr != cells.end(); itr++)
-  {
-    int key = itr->first;
-    int value = itr->second;
-    int idx = (key * 2) / 8;
-
-    out[idx] |= value << (6 - ((key % 4) * 2));
+  std::fill_n(out, totalBytes, 0);
+  for (int i = 0; i < SIZE; i++) {
+    out[(i * 2) / 8] |= cells[i] << (6 - ((i % 4) * 2));
+    strip.setPixelColor(i, colors[cells[i]]);
   }
-
   // Write matrix to read property
-  uint8_t *data = out;
-  size_t len = sizeof(out);
-  // FIXME: This setValue call isn't producing the value I expect in the client. How do we test this?
-  pReadMatrixCharacteristic->setValue(out, len);
-  
-  // Logging Help
-  // int bufSize = sizeof(out) * 2 + 1;
-  // char buf[bufSize]; /* one extra for \0 */
-  // if (to_hex(buf, sizeof(buf), out, sizeof(out)))
-  // {
-  //   Serial.printf("%s\n", buf);
-  // }
+  pReadMatrixCharacteristic->setValue(out, sizeof(out));
+  strip.show();
 };
 
 
 
 class WriteCellCB : public BLECharacteristicCallbacks
 {
-  // TODO: Remove
-  void onRead(BLECharacteristic *pChar)
-  {
-    Serial.println("onRead");
-  }
-
   // Handles incoming writes
   void onWrite(BLECharacteristic *pChar)
   {
-    // int charLen = pChar->getLength();
     uint8_t *data = pChar->getData();
 
     // Get cell to update
@@ -262,15 +206,11 @@ class WriteCellCB : public BLECharacteristicCallbacks
     // Get cell state
     int color = data[1];
 
-    std::map<int, int>::iterator it = cells.find(cellUpdate);
-    // if cell and color exists, then set value in cell map
-    if (it != cells.end() && colors.find(color) != colors.end())
-    {
-      Serial.printf("Found cell: %i\n", cellUpdate);
-      Serial.printf("Found color: %i\n", color);
-      it->second = color;
-    }
 
+    if (sizeof(cells) >= cellUpdate)
+    {
+      cells[cellUpdate] = color;
+    }
     writeMatrixCharacteristic();
   }
 };
@@ -285,10 +225,9 @@ void setup()
 
   // Create BLE Server
   pServer = BLEDevice::createServer();
-
   // Setup connection callbacks
   pServer->setCallbacks(new ServerCB());
-
+  
   // Initialize service
   BLEService *pService = pServer->createService(LED_MATRIX_SERVICE_UUID);
 
@@ -303,18 +242,19 @@ void setup()
       LED_MATRIX_STATE_CHARACTERISTIC_UUID,
       BLECharacteristic::PROPERTY_READ);
   
-  // Populate Matrix Characteristic
-  writeMatrixCharacteristic();
-
   // LED_MATRIX_SIZE_CHARACTERISTIC_UUID
   pReadMatrixSizeCharacteristic = pService->createCharacteristic(
     LED_MATRIX_SIZE_CHARACTERISTIC_UUID,
     BLECharacteristic::PROPERTY_READ);
   
+  // Initialize LED Matrix
+  strip.begin();
+  strip.setBrightness(50);
+
+  // Populate Matrix Characteristic
+  writeMatrixCharacteristic();
   // Populate Matrix Size Characteristic
   writeMatrixSizeCharacteristic();
-
-  // TODO: Initialize LED Matrix
 
   pService->start();
 
@@ -326,12 +266,11 @@ void setup()
   pAdvertising->setMinPreferred(0x12);
   pAdvertising->start();
 
-  Serial.println("Characteristic defined! Now you can read it in your phone!");
+  Serial.println("Ready");
 }
+
 
 void loop()
 {
-  // TODO: Set LED Matrix
-
   delay(2000);
 }
