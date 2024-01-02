@@ -162,15 +162,6 @@ BLECharacteristic *pWriteCellCharacteristic;
 BLECharacteristic *pReadMatrixCharacteristic;
 BLECharacteristic *pReadMatrixSizeCharacteristic;
 
-// FIXME: Not connected to anything yet and not actually doing anything either.
-void resetBoard()
-{
-  Serial.println("Resetting Board!");
-  std::fill_n(cells, SIZE, 0);
-  writeMatrixCharacteristic();
-}
-
-
 void writeMatrixSizeCharacteristic()
 {
   uint8_t v = SIZE;
@@ -192,7 +183,13 @@ void writeMatrixCharacteristic()
   strip.show();
 };
 
-
+// FIXME: Not connected to anything yet and not actually doing anything either.
+void resetBoard()
+{
+  Serial.println("Resetting Board!");
+  std::fill_n(cells, SIZE, 0);
+  writeMatrixCharacteristic();
+}
 
 class WriteCellCB : public BLECharacteristicCallbacks
 {
